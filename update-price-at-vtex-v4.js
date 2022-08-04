@@ -1,6 +1,12 @@
 class Automation {
   async run(ctx) {
-    await linkapi.transaction.start('update-price-at-vtex');
+    await linkapi.transaction.start('update-price-at-vtex-v4');
+
+    await linkapi.transaction.trace('update-price-at-vtex-v4', {
+      status: 'SUCCESS',
+      name: 'HOUR OF START AUTOMATION',
+      data: new Date().toISOString()
+    });
 
     let skusUpdatedWithSuccess = [];
     let skusUpdatedWithError = [];
@@ -23,6 +29,44 @@ class Automation {
         allFormattedSkus.push(skusFromDatabase.splice(0, 39));
       }
 
+      // CASO SEJA NECESSÁRIO REPROCESSAR SKUS ESPECIFICOS 
+      if (ctx.retry && ctx.retry.length > 0) {
+        let allSkusToRetry = [];
+
+        for (const RefId of ctx.retry) {
+          const skuToRetry = await samsungecommercedatabaseV2.request('GET', 'skus-d2c', {
+            queryString: {
+              RefId
+            }
+          });
+
+          await linkapi.transaction.trace('update-price-at-vtex-v4', {
+            status: 'SUCCESS',
+            name: 'SKU TO RETRY',
+            data: {
+              RefId,
+              skuToRetry
+            }
+          });
+
+          if (skuToRetry.length > 0) {
+            allSkusToRetry.push(skuToRetry[0]);
+          }
+        }
+
+        allFormattedSkus = [allSkusToRetry];
+      }
+
+      if (!allFormattedSkus.length) {
+        await linkapi.transaction.trace('update-price-at-vtex-v4', {
+          status: 'EMPTY',
+          name: 'NO SKUS TO INTEGRATE',
+          data: allFormattedSkus
+        });
+
+        return linkapi.transaction.empty('update-price-at-vtex-v4');
+      }
+
       for (const allSkus of allFormattedSkus) {
         try {
           let inputLines = []
@@ -34,7 +78,7 @@ class Automation {
             <!--Optional:-->
             <KPOSN>${(index + 1) * 10}</KPOSN>
             <!--Optional:-->
-            <MATNR>${sku.RefId}</MATNR>
+            <MATNR>${sku.RefId.toUpperCase()}</MATNR>
             <!--Optional:-->
             <WERKS></WERKS>
             <!--Optional:-->
@@ -96,11 +140,19 @@ class Automation {
               try {
                 await linkapi.transaction.trace(uniqueKey, {
                   status: 'SUCCESS',
-                  name: 'SKU',
+                  name: 'SKU TO INTEGRATE',
                   data: product
                 });
 
-                const sku = allSkus.find((sku) => product.id === sku.RefId);
+                const sku = allSkus.find(
+                  (sku) => product.id === sku.RefId.toUpperCase()
+                );
+
+                await linkapi.transaction.trace(uniqueKey, {
+                  status: 'SUCCESS',
+                  name: 'SKU FROM MONGODB',
+                  data: sku
+                });
 
                 await linkapi.transaction.trace(uniqueKey, {
                   status: 'SUCCESS',
@@ -171,11 +223,11 @@ class Automation {
           }
         }
         catch (error) {
-          await linkapi.transaction.trace('update-price-at-vtex', {
+          await linkapi.transaction.trace('update-price-at-vtex-v4', {
             status: 'ERROR',
             name: 'ERROR TO PROCESS SKUS',
             data: {
-              skus: allSkus,
+              skus: allSkus.map(sku => sku.RefId),
               message: error.message || error,
               stack: error.stack || null,
             }
@@ -183,20 +235,25 @@ class Automation {
         }
       }
 
-      await linkapi.transaction.trace('update-price-at-vtex', {
+      await linkapi.transaction.trace('update-price-at-vtex-v4', {
         status: 'SUCCESS',
         name: 'REPORT',
         data: {
           numberOfSuccess: skusUpdatedWithSuccess.length,
           numberOfError: skusUpdatedWithError.length,
-          skusUpdatedWithError
         }
       });
 
-      await linkapi.transaction.success('update-price-at-vtex');
+      await linkapi.transaction.trace('update-price-at-vtex-v4', {
+        status: 'SUCCESS',
+        name: 'HOUR OF END AUTOMATION',
+        data: new Date().toISOString()
+      });
+
+      await linkapi.transaction.success('update-price-at-vtex-v4');
     }
     catch (error) {
-      await linkapi.transaction.trace('update-price-at-vtex', {
+      await linkapi.transaction.trace('update-price-at-vtex-v4', {
         status: 'ERROR',
         name: 'ERROR TO PROCESS AUTOMATION',
         data: {
@@ -205,7 +262,7 @@ class Automation {
         }
       });
 
-      await linkapi.transaction.failed('update-price-at-vtex');
+      await linkapi.transaction.failed('update-price-at-vtex-v4');
     }
   }
 }
